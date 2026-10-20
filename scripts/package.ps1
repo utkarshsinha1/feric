@@ -8,6 +8,16 @@ $DistDir = Join-Path $RootDir "dist"
 $InputDir = Join-Path $RootDir "target\jpackage-input"
 $IconPath = Join-Path $RootDir "logos\feric.ico"
 
+$RuntimeImage = $env:JAVA_HOME
+if ([string]::IsNullOrWhiteSpace($RuntimeImage)) {
+    $JpackagePath = (Get-Command jpackage -ErrorAction Stop).Source
+    $RuntimeImage = Split-Path (Split-Path $JpackagePath -Parent) -Parent
+}
+if (-not (Test-Path (Join-Path $RuntimeImage "bin\java.exe")) `
+        -or -not (Test-Path (Join-Path $RuntimeImage "bin\javac.exe"))) {
+    throw "The packaging runtime must be a full JDK installation: $RuntimeImage"
+}
+
 Push-Location $RootDir
 try {
     mvn -B clean package
@@ -31,8 +41,14 @@ try {
         --input $InputDir `
         --main-jar $JarName `
         --main-class "com.classroom.live.AppLauncher" `
-        --add-modules java.desktop,java.net.http,jdk.compiler `
+        --runtime-image $RuntimeImage `
         --icon $IconPath `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED" `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED" `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED" `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED" `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED" `
+        --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED" `
         --dest $DistDir
     if ($LASTEXITCODE -ne 0) {
         throw "jpackage failed with exit code $LASTEXITCODE"

@@ -58,22 +58,41 @@ public record SupabaseConfig(String projectUrl, String publishableKey) {
     }
 
     public static SupabaseConfig load() throws IOException {
-        String url = System.getenv("FERIC_SUPABASE_URL");
-        String key = System.getenv("FERIC_SUPABASE_PUBLISHABLE_KEY");
+        String environmentUrl = System.getenv("FERIC_SUPABASE_URL");
+        String environmentKey = System.getenv("FERIC_SUPABASE_PUBLISHABLE_KEY");
         Path path = Path.of(System.getProperty("user.home"), ".feric", "supabase.properties");
-        if ((url == null || url.isBlank() || key == null || key.isBlank())
-                && Files.isRegularFile(path)) {
-            Properties properties = new Properties();
+        Properties userProperties = new Properties();
+        if (Files.isRegularFile(path)) {
             try (InputStream input = Files.newInputStream(path)) {
-                properties.load(input);
-            }
-            if (url == null || url.isBlank()) {
-                url = properties.getProperty("projectUrl");
-            }
-            if (key == null || key.isBlank()) {
-                key = properties.getProperty("publishableKey");
+                userProperties.load(input);
             }
         }
+
+        Properties bundledProperties = new Properties();
+        try (InputStream input = SupabaseConfig.class.getResourceAsStream(
+                "/supabase.properties")) {
+            if (input != null) {
+                bundledProperties.load(input);
+            }
+        }
+        return load(environmentUrl, environmentKey, userProperties, bundledProperties);
+    }
+
+    static SupabaseConfig load(
+            String environmentUrl,
+            String environmentKey,
+            Properties userProperties,
+            Properties bundledProperties) {
+        String url = firstNonBlank(
+            environmentUrl,
+            userProperties.getProperty("projectUrl"),
+            bundledProperties.getProperty("projectUrl")
+        );
+        String key = firstNonBlank(
+            environmentKey,
+            userProperties.getProperty("publishableKey"),
+            bundledProperties.getProperty("publishableKey")
+        );
         if (url == null || url.isBlank() || key == null || key.isBlank()) {
             throw new IllegalStateException(
                 "Configure FERIC_SUPABASE_URL and FERIC_SUPABASE_PUBLISHABLE_KEY, "
@@ -81,5 +100,14 @@ public record SupabaseConfig(String projectUrl, String publishableKey) {
             );
         }
         return new SupabaseConfig(url, key);
+    }
+
+    private static String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 }

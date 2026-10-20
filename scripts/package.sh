@@ -10,7 +10,28 @@ INPUT_DIR="$ROOT_DIR/target/jpackage-input"
 PNG_ICON="$ROOT_DIR/logos/feric-app-icon.png"
 
 cd "$ROOT_DIR"
+if [ -n "${JAVA_HOME:-}" ]; then
+  RUNTIME_IMAGE=$JAVA_HOME
+elif [ "$(uname -s)" = "Darwin" ]; then
+  RUNTIME_IMAGE=$(/usr/libexec/java_home)
+else
+  printf 'JAVA_HOME must point to a full JDK installation.\n' >&2
+  exit 1
+fi
+if [ ! -x "$RUNTIME_IMAGE/bin/java" ] || [ ! -x "$RUNTIME_IMAGE/bin/javac" ]; then
+  printf 'The packaging runtime must be a full JDK: %s\n' "$RUNTIME_IMAGE" >&2
+  exit 1
+fi
+
 mvn -B clean package
+JPACKAGE_RUNTIME=$RUNTIME_IMAGE
+if [ "$(uname -s)" = "Linux" ]; then
+  JPACKAGE_RUNTIME="$ROOT_DIR/target/feric-runtime"
+  "$RUNTIME_IMAGE/bin/jlink" \
+    --add-modules java.desktop,java.net.http,jdk.compiler,jdk.crypto.ec \
+    --output "$JPACKAGE_RUNTIME"
+fi
+
 mkdir -p "$DIST_DIR"
 rm -rf "$INPUT_DIR" "$DIST_DIR/$APP_NAME" "$DIST_DIR/${APP_NAME}.app"
 rm -f "$DIST_DIR/${APP_NAME}-macOS.zip" "$DIST_DIR/${APP_NAME}-Linux.zip"
@@ -52,8 +73,14 @@ jpackage \
   --input "$INPUT_DIR" \
   --main-jar "$JAR_NAME" \
   --main-class com.classroom.live.AppLauncher \
-  --add-modules java.desktop,java.net.http,jdk.compiler \
+  --runtime-image "$JPACKAGE_RUNTIME" \
   --icon "$ICON" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED" \
+  --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED" \
   --dest "$PACKAGE_DEST"
 
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -64,7 +91,16 @@ if [ "$(uname -s)" = "Darwin" ]; then
   ditto "$PACKAGE_DEST/${APP_NAME}.app" "$DIST_DIR/${APP_NAME}.app"
   strip_finder_info "$DIST_DIR/${APP_NAME}.app"
 else
+  if [ "$(uname -s)" = "Linux" ]; then
+    APP_RUNTIME="$DIST_DIR/$APP_NAME/lib/runtime"
+    if [ ! -d "$APP_RUNTIME" ]; then
+      printf 'jpackage did not create the Linux runtime directory: %s\n' "$APP_RUNTIME" >&2
+      exit 1
+    fi
+    rm -rf "$APP_RUNTIME"
+    cp -a "$RUNTIME_IMAGE" "$APP_RUNTIME"
+  fi
   zip -qr "$DIST_DIR/${APP_NAME}-Linux.zip" "$DIST_DIR/$APP_NAME"
 fi
 
-printf 'App image created in %s\\n' "$DIST_DIR"
+printf 'App image created in %s\n' "$DIST_DIR"
