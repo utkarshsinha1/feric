@@ -11,6 +11,8 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.Window;
 import java.awt.datatransfer.StringSelection;
+import java.util.ArrayList;
+import java.util.List;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JDialog;
@@ -30,12 +32,29 @@ final class AccountControls extends JPanel {
         email = client.signedInEmail();
         setOpaque(true);
         setBackground(IdeTheme.SIDEBAR);
-        setPreferredSize(new Dimension(48, 100));
+        setPreferredSize(new Dimension(56, 100));
         setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, IdeTheme.BORDER));
 
-        JPanel bottomActions = new JPanel(new GridLayout(2, 1, 0, 6));
+        JPanel navigation = new JPanel();
+        navigation.setOpaque(false);
+        navigation.setLayout(new javax.swing.BoxLayout(navigation, javax.swing.BoxLayout.Y_AXIS));
+        navigation.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
+        List<ActivityButton> activityButtons = new ArrayList<>();
+        for (ActivityIcon icon : ActivityIcon.values()) {
+            ActivityButton button = new ActivityButton(icon);
+            button.setAlignmentX(CENTER_ALIGNMENT);
+            activityButtons.add(button);
+            navigation.add(button);
+        }
+        activityButtons.get(0).setActive(true);
+        activityButtons.forEach(button -> button.addActionListener(event -> {
+            activityButtons.forEach(item -> item.setActive(item == button));
+        }));
+        add(navigation, BorderLayout.CENTER);
+
+        JPanel bottomActions = new JPanel(new GridLayout(2, 1, 0, 4));
         bottomActions.setOpaque(false);
-        bottomActions.setBorder(BorderFactory.createEmptyBorder(0, 0, 10, 0));
+        bottomActions.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
 
         JButton account = new BrandMarkButton();
         account.setToolTipText(email.isBlank() ? "Account details unavailable" : email);
@@ -147,7 +166,9 @@ final class AccountControls extends JPanel {
 
     private abstract static class RailButton extends JButton {
         private RailButton(String tooltip) {
-            setPreferredSize(new Dimension(48, 42));
+            setPreferredSize(new Dimension(54, 48));
+            setMinimumSize(new Dimension(54, 48));
+            setMaximumSize(new Dimension(54, 48));
             setContentAreaFilled(false);
             setFocusPainted(false);
             setBorderPainted(false);
@@ -160,6 +181,10 @@ final class AccountControls extends JPanel {
             super.paintComponent(graphics);
             Graphics2D g = (Graphics2D) graphics.create();
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (getModel().isPressed()) {
+                g.setColor(new Color(255, 255, 255, 18));
+                g.fillRoundRect(9, 3, 36, 42, 8, 8);
+            }
             paintIcon(g);
             g.dispose();
         }
@@ -168,6 +193,83 @@ final class AccountControls extends JPanel {
 
         protected Color iconColor() {
             return getModel().isRollover() ? IdeTheme.TEXT : IdeTheme.MUTED;
+        }
+    }
+
+    private enum ActivityIcon {
+        EXPLORER("Explorer"),
+        SEARCH("Search"),
+        SOURCE_CONTROL("Source control"),
+        RUN("Run and debug"),
+        EXTENSIONS("Extensions");
+
+        private final String label;
+
+        ActivityIcon(String label) {
+            this.label = label;
+        }
+    }
+
+    private static final class ActivityButton extends RailButton {
+        private final ActivityIcon icon;
+        private boolean active;
+
+        private ActivityButton(ActivityIcon icon) {
+            super(icon.label);
+            this.icon = icon;
+            getAccessibleContext().setAccessibleName(icon.label);
+        }
+
+        private void setActive(boolean active) {
+            this.active = active;
+            repaint();
+        }
+
+        @Override
+        protected void paintIcon(Graphics2D g) {
+            int x = getWidth() / 2;
+            int y = getHeight() / 2;
+            g.setColor(active ? IdeTheme.TEXT : iconColor());
+            g.setStroke(new java.awt.BasicStroke(
+                2.1f, java.awt.BasicStroke.CAP_ROUND, java.awt.BasicStroke.JOIN_ROUND));
+            if (active) {
+                g.setColor(IdeTheme.ACCENT);
+                g.fillRoundRect(0, 5, 3, getHeight() - 10, 3, 3);
+                g.setColor(IdeTheme.TEXT);
+            }
+            switch (icon) {
+                case EXPLORER -> {
+                    g.drawRoundRect(x - 13, y - 15, 24, 29, 4, 4);
+                    g.drawRoundRect(x - 8, y - 10, 24, 29, 4, 4);
+                    g.drawLine(x - 3, y - 1, x + 8, y - 1);
+                    g.drawLine(x - 3, y + 5, x + 8, y + 5);
+                }
+                case SEARCH -> {
+                    g.drawOval(x - 12, y - 13, 20, 20);
+                    g.drawLine(x + 4, y + 3, x + 13, y + 12);
+                }
+                case SOURCE_CONTROL -> {
+                    g.drawOval(x - 12, y - 14, 8, 8);
+                    g.drawOval(x - 12, y + 6, 8, 8);
+                    g.drawOval(x + 5, y - 4, 8, 8);
+                    g.drawLine(x - 8, y - 6, x - 8, y + 6);
+                    g.drawLine(x - 4, y - 8, x + 5, y - 2);
+                }
+                case RUN -> {
+                    g.drawRoundRect(x - 13, y - 12, 20, 24, 5, 5);
+                    g.drawLine(x - 6, y - 5, x + 2, y);
+                    g.drawLine(x + 2, y, x - 6, y + 5);
+                    g.drawLine(x - 6, y + 5, x - 6, y - 5);
+                    g.drawArc(x + 5, y + 3, 13, 13, 30, 300);
+                }
+                case EXTENSIONS -> {
+                    g.drawRoundRect(x - 12, y - 12, 10, 10, 3, 3);
+                    g.drawRoundRect(x + 2, y - 12, 10, 10, 3, 3);
+                    g.drawRoundRect(x - 12, y + 2, 10, 10, 3, 3);
+                    g.drawRoundRect(x + 2, y + 2, 10, 10, 3, 3);
+                }
+                default -> { }
+            }
         }
     }
 
