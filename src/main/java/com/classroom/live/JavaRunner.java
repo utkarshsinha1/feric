@@ -130,6 +130,253 @@ public final class JavaRunner {
         }
     }
 
+    public static PreparedProgram prepareJavaProject(
+            Map<String, String> sourceFiles, String mainClass, Path workingDirectory)
+            throws IOException, InterruptedException {
+        if (sourceFiles == null || sourceFiles.isEmpty()) {
+            throw new IOException("The project contains no Java source files.");
+        }
+        Path directory = Files.createTempDirectory("feric-java-terminal-");
+        try {
+            List<Path> javaSources = new ArrayList<>();
+            for (var entry : sourceFiles.entrySet()) {
+                String relative = WorkspacePath.normalize(entry.getKey());
+                if (!relative.toLowerCase(Locale.ROOT).endsWith(".java")) {
+                    continue;
+                }
+                Path destination = directory.resolve(relative).normalize();
+                if (!destination.startsWith(directory)) {
+                    throw new IOException("Invalid Java source path: " + relative);
+                }
+                Files.createDirectories(destination.getParent());
+                Files.writeString(destination, entry.getValue(), StandardCharsets.UTF_8);
+                javaSources.add(destination);
+            }
+            if (javaSources.isEmpty()) {
+                throw new IOException("The project contains no Java source files.");
+            }
+            javaSources.sort(Comparator.comparing(Path::toString));
+            String selectedClass = mainClass == null ? "" : mainClass.trim();
+            if (!selectedClass.matches("[A-Za-z_$][A-Za-z0-9_$.]*")) {
+                throw new IOException("Invalid Java main class name. Example: Main");
+            }
+            if (!selectedClass.contains(".")) {
+                String classFileName = selectedClass + ".java";
+                String selectedSource = sourceFiles.entrySet().stream()
+                    .filter(entry -> entry.getKey().endsWith(classFileName))
+                    .map(Map.Entry::getValue)
+                    .findFirst().orElse("");
+                Matcher packageMatcher = Pattern.compile(
+                    "(?m)^\\s*package\\s+"
+                        + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;"
+                ).matcher(selectedSource);
+                if (packageMatcher.find()) {
+                    selectedClass = packageMatcher.group(1) + "." + selectedClass;
+                }
+            }
+            Path compileLog = directory.resolve("compile.txt");
+            List<String> compile = new ArrayList<>(List.of(
+                javaTool("javac"), "-encoding", "UTF-8", "-d", directory.toString()));
+            javaSources.forEach(path -> compile.add(path.toString()));
+            Process compiler = new ProcessBuilder(compile)
+                .redirectErrorStream(true)
+                .redirectOutput(compileLog.toFile())
+                .start();
+            if (!compiler.waitFor(60, TimeUnit.SECONDS)) {
+                compiler.destroyForcibly();
+                compiler.waitFor();
+                throw new IOException("Java compilation timed out.\n" + read(compileLog));
+            }
+            String compileMessages = read(compileLog);
+            if (compiler.exitValue() != 0) {
+                throw new IOException(
+                    "=== JAVA COMPILATION FAILED ===\n\n" + compileMessages);
+            }
+
+            Path runDirectory = workingDirectory != null
+                    && Files.isDirectory(workingDirectory)
+                ? workingDirectory.toAbsolutePath().normalize() : directory;
+            ProcessBuilder program = new ProcessBuilder(
+                javaTool("java"), "-cp", directory.toString(), selectedClass)
+                .directory(runDirectory.toFile());
+            return new PreparedProgram(directory, program, compileMessages);
+        } catch (IOException | InterruptedException | RuntimeException exception) {
+            deleteDirectory(directory);
+            throw exception;
+        }
+    }
+
+    public static PreparedProgram prepareProgram(
+            String source, String language, String className, Path workingDirectory)
+            throws IOException, InterruptedException {
+        if (source == null || source.isBlank()) {
+            throw new IOException("Please enter some code first.");
+        }
+        String selectedLanguage = language == null
+                ? "" : language.trim().toLowerCase(Locale.ROOT);
+        Path directory = Files.createTempDirectory("feric-program-");
+        try {
+            Path sourceFile;
+            List<String> command;
+            String compilationOutput = "";
+            switch (selectedLanguage) {
+                case "java" -> {
+                    if (className == null
+                            || !className.matches("[A-Za-z_$][A-Za-z0-9_$]*")) {
+                        throw new IOException("Invalid Java class name. Example: Main");
+                    }
+                    sourceFile = directory.resolve(className + ".java");
+                    Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+                    Path compileLog = directory.resolve("compile.txt");
+                    compilationOutput = compile(
+                        List.of(javaTool("javac"), "-encoding", "UTF-8", "-d",
+                            directory.toString(), sourceFile.toString()),
+                        compileLog, 60, "JAVA");
+                    Matcher packageMatcher = Pattern.compile(
+                        "(?m)^\\s*package\\s+"
+                            + "([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;"
+                    ).matcher(source);
+                    String selectedClass = packageMatcher.find()
+                        ? packageMatcher.group(1) + "." + className : className;
+                    command = List.of(
+                        javaTool("java"), "-cp", directory.toString(), selectedClass);
+                }
+                case "c", "c++", "cpp" -> {
+                    boolean cpp = selectedLanguage.equals("c++")
+                        || selectedLanguage.equals("cpp");
+                    sourceFile = directory.resolve(cpp ? "Main.cpp" : "Main.c");
+                    Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+                    Path executable = directory.resolve(
+                        System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")
+                            ? "program.exe" : "program");
+                    String compiler = cpp
+                        ? findCompiler("clang++", "g++") : findCompiler("clang", "gcc");
+                    if (compiler == null) {
+                        throw new IOException((cpp ? "C++" : "C")
+                            + " compiler not found. Install a compiler and add it to PATH.");
+                    }
+                    Path compileLog = directory.resolve("compile.txt");
+                    compilationOutput = compile(List.of(
+                        compiler, cpp ? "-std=c++17" : "-std=c11", "-Wall", "-Wextra",
+                        "-O0", sourceFile.toString(), "-o", executable.toString()),
+                        compileLog, 60, cpp ? "C++" : "C");
+                    command = List.of(executable.toString());
+                }
+                case "python" -> {
+                    sourceFile = directory.resolve("main.py");
+                    Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+                    command = List.of(
+                        System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")
+                            ? "python" : "python3",
+                        sourceFile.toString());
+                }
+                case "javascript", "js" -> {
+                    sourceFile = directory.resolve("main.js");
+                    Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+                    command = List.of("node", sourceFile.toString());
+                }
+                case "c#", "csharp" -> {
+                    String version = commandOutput("dotnet", "--version");
+                    Matcher versionMatcher = version == null ? null
+                        : Pattern.compile("^(\\d+)\\.").matcher(version.trim());
+                    if (versionMatcher == null || !versionMatcher.find()) {
+                        throw new IOException(
+                            "C# requires the .NET SDK. Install it and ensure dotnet is on PATH.");
+                    }
+                    String framework = "net" + versionMatcher.group(1) + ".0";
+                    Path project = directory.resolve("FericProgram.csproj");
+                    sourceFile = directory.resolve("Program.cs");
+                    String projectXml =
+                        "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>"
+                            + "<OutputType>Exe</OutputType><TargetFramework>" + framework
+                            + "</TargetFramework><ImplicitUsings>enable</ImplicitUsings>"
+                            + "<Nullable>enable</Nullable></PropertyGroup></Project>";
+                    Files.writeString(project, projectXml, StandardCharsets.UTF_8);
+                    Files.writeString(sourceFile, source, StandardCharsets.UTF_8);
+                    Path buildLog = directory.resolve("build.txt");
+                    compilationOutput = compile(List.of(
+                        "dotnet", "build", project.toString(),
+                        "--configuration", "Release", "--nologo"),
+                        buildLog, 90, "C#");
+                    Path assembly = directory.resolve(
+                        "bin/Release/" + framework + "/FericProgram.dll");
+                    if (!Files.isRegularFile(assembly)) {
+                        throw new IOException(
+                            "C# build completed, but the program assembly was not found.\n"
+                                + compilationOutput);
+                    }
+                    command = List.of("dotnet", assembly.toString());
+                }
+                default -> throw new IOException("Unsupported language: " + language);
+            }
+            Path runDirectory = workingDirectory != null
+                    && Files.isDirectory(workingDirectory)
+                ? workingDirectory.toAbsolutePath().normalize() : directory;
+            return new PreparedProgram(
+                directory, new ProcessBuilder(command).directory(runDirectory.toFile()),
+                compilationOutput);
+        } catch (IOException | InterruptedException | RuntimeException exception) {
+            deleteDirectory(directory);
+            throw exception;
+        }
+    }
+
+    private static String compile(
+            List<String> command, Path log, int timeoutSeconds, String language)
+            throws IOException, InterruptedException {
+        Process compiler = new ProcessBuilder(command)
+            .redirectErrorStream(true)
+            .redirectOutput(log.toFile())
+            .start();
+        if (!compiler.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+            compiler.destroyForcibly();
+            compiler.waitFor();
+            throw new IOException(language + " compilation timed out.\n" + read(log));
+        }
+        String output = read(log);
+        if (compiler.exitValue() != 0) {
+            throw new IOException(
+                "=== " + language + " COMPILATION FAILED ===\n\n" + output);
+        }
+        return output;
+    }
+
+    public static final class PreparedProgram implements AutoCloseable {
+        private final Path directory;
+        private final ProcessBuilder processBuilder;
+        private final String compilationOutput;
+
+        private PreparedProgram(
+                Path directory, ProcessBuilder processBuilder, String compilationOutput) {
+            this.directory = directory;
+            this.processBuilder = processBuilder;
+            this.compilationOutput = compilationOutput;
+        }
+
+        public Process start() throws IOException {
+            return processBuilder.start();
+        }
+
+        public String compilationOutput() {
+            return compilationOutput;
+        }
+
+        public List<String> commandLine() {
+            return List.copyOf(processBuilder.command());
+        }
+
+        public Path workingDirectory() {
+            return processBuilder.directory() == null
+                ? Path.of("").toAbsolutePath().normalize()
+                : processBuilder.directory().toPath();
+        }
+
+        @Override
+        public void close() {
+            deleteDirectory(directory);
+        }
+    }
+
     // ---------------- JAVA ----------------
 
     private static String runJava(

@@ -11,6 +11,10 @@ import java.awt.event.WindowEvent;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -39,6 +43,9 @@ public class CloudTeacherApp extends javax.swing.JFrame {
     private final ClassroomService service;
     private final JComboBox<ClassroomService.Classroom> rooms = new JComboBox<>();
     private final JTextField roomCode = new JTextField(10);
+    private final JButton createRoomButton = new JButton("Create Classroom");
+    private final JButton deleteRoomButton = new JButton("Delete Classroom");
+    private final JButton copyCodeButton = new JButton("Copy code");
     private final JLabel status = new JLabel("Loading classrooms…");
     private final JLabel memberCount = new JLabel("0 connected");
     private final JTabbedPane tabs = new JTabbedPane();
@@ -51,11 +58,13 @@ public class CloudTeacherApp extends javax.swing.JFrame {
     private final Set<CodeEditor> suppressChanges = new HashSet<>();
     private final Timer autosave;
     private final Timer presenceTimer;
-    private ClassroomService.Classroom activeRoom;
+    private volatile ClassroomService.Classroom activeRoom;
     private RemoteWorkspaceExplorer explorer;
     private RealtimeSyncService realtime;
     private CodeEditor activeEditor;
     private JPanel explorerHolder;
+    private boolean suppressRoomSelection;
+    private boolean deletingClassroom;
 
     public CloudTeacherApp(SupabaseClient client) {
         super("Feric — Teacher");
@@ -72,6 +81,10 @@ public class CloudTeacherApp extends javax.swing.JFrame {
         buildInterface();
         installIcon();
         rooms.addActionListener(event -> {
+            updateDeleteButton();
+            if (suppressRoomSelection) {
+                return;
+            }
             Object selected = rooms.getSelectedItem();
             if (selected instanceof ClassroomService.Classroom room
                     && (activeRoom == null || !activeRoom.id().equals(room.id()))) {
@@ -87,6 +100,7 @@ public class CloudTeacherApp extends javax.swing.JFrame {
                 if (explorer != null) {
                     explorer.close();
                 }
+                CompilerPanel.shutdown();
             }
         });
         setVisible(true);
@@ -121,24 +135,24 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             item.setBorder(BorderFactory.createEmptyBorder(4, 7, 4, 7));
             return item;
         });
-        JButton create = new JButton("Create Classroom");
-        IdeTheme.styleButton(create);
-        create.addActionListener(event -> createClassroom());
-        JButton copyCode = new JButton("Copy code");
-        IdeTheme.styleButton(copyCode);
-        copyCode.addActionListener(event -> copyRoomCode());
+        IdeTheme.styleButton(createRoomButton);
+        createRoomButton.addActionListener(event -> createClassroom());
+        IdeTheme.styleButton(deleteRoomButton);
+        deleteRoomButton.setForeground(new java.awt.Color(235, 105, 97));
+        deleteRoomButton.setEnabled(false);
+        deleteRoomButton.addActionListener(event -> deleteActiveClassroom());
+        IdeTheme.styleButton(copyCodeButton);
+        copyCodeButton.setEnabled(false);
+        copyCodeButton.addActionListener(event -> copyRoomCode());
         JLabel codeCaption = new JLabel("JOIN CODE");
         codeCaption.setForeground(IdeTheme.MUTED);
         codeCaption.setFont(IdeTheme.UI_FONT.deriveFont(Font.BOLD, 9f));
+        IdeTheme.styleTextField(roomCode);
         roomCode.setForeground(IdeTheme.TEXT);
         roomCode.setEditable(false);
         roomCode.setFocusable(true);
         TextEditingSupport.install(roomCode);
         roomCode.setHorizontalAlignment(JTextField.CENTER);
-        roomCode.setBackground(IdeTheme.EDITOR);
-        roomCode.setCaretColor(IdeTheme.TEXT);
-        roomCode.setSelectionColor(IdeTheme.SELECTION);
-        roomCode.setSelectedTextColor(java.awt.Color.WHITE);
         roomCode.setToolTipText("Select and copy this classroom code");
         roomCode.addFocusListener(new FocusAdapter() {
             @Override
@@ -147,15 +161,13 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             }
         });
         roomCode.setFont(IdeTheme.UI_FONT.deriveFont(Font.BOLD, 16f));
-        roomCode.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(IdeTheme.BORDER),
-            BorderFactory.createEmptyBorder(4, 9, 4, 9)));
         roomBar.add(new JLabel("Classroom"));
         roomBar.add(rooms);
-        roomBar.add(create);
+        roomBar.add(createRoomButton);
+        roomBar.add(deleteRoomButton);
         roomBar.add(codeCaption);
         roomBar.add(roomCode);
-        roomBar.add(copyCode);
+        roomBar.add(copyCodeButton);
         top.add(roomBar, BorderLayout.SOUTH);
 
         explorerHolder = new JPanel(new BorderLayout());
@@ -194,10 +206,11 @@ public class CloudTeacherApp extends javax.swing.JFrame {
         editorPanel.add(editorToolbar, BorderLayout.NORTH);
         editorPanel.add(tabs, BorderLayout.CENTER);
 
-        JPanel compiler = CompilerPanel.create(() -> activeEditor, this::javaProjectSources);
+        JPanel compiler = CompilerPanel.create(
+            () -> activeEditor, this::javaProjectSources, this::teacherWorkspaceDirectory);
         JSplitPane vertical = new JSplitPane(JSplitPane.VERTICAL_SPLIT, editorPanel, compiler);
         IdeTheme.styleSplitPane(vertical);
-        vertical.setResizeWeight(0.72);
+        vertical.setResizeWeight(0.68);
         JSplitPane horizontal = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, sidebar, vertical);
         IdeTheme.styleSplitPane(horizontal);
         horizontal.setResizeWeight(0);
@@ -212,10 +225,19 @@ public class CloudTeacherApp extends javax.swing.JFrame {
         memberCount.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 12));
         footer.add(memberCount, BorderLayout.EAST);
 
-        root.add(top, BorderLayout.NORTH);
-        root.add(horizontal, BorderLayout.CENTER);
-        root.add(footer, BorderLayout.SOUTH);
+        JPanel workspace = new JPanel(new BorderLayout());
+        workspace.setBackground(IdeTheme.BACKGROUND);
+        workspace.add(top, BorderLayout.NORTH);
+        workspace.add(horizontal, BorderLayout.CENTER);
+        workspace.add(footer, BorderLayout.SOUTH);
+        root.add(new AccountControls(this, client, "Teacher account"), BorderLayout.WEST);
+        root.add(workspace, BorderLayout.CENTER);
         setContentPane(root);
+        SwingUtilities.invokeLater(() -> {
+            if (isDisplayable()) {
+                vertical.setDividerLocation(0.68);
+            }
+        });
     }
 
     private void loadOwnedRooms() {
@@ -276,6 +298,96 @@ public class CloudTeacherApp extends javax.swing.JFrame {
         }.execute();
     }
 
+    private void deleteActiveClassroom() {
+        ClassroomService.Classroom room = activeRoom;
+        if (room == null || deletingClassroom) {
+            return;
+        }
+        String message = "Permanently delete \"" + room.name() + "\"?\n\n"
+            + "This removes its files, folders, classroom membership, and join code. "
+            + "Students will lose access. This cannot be undone."
+            + (dirty.isEmpty() ? "" : "\n\nUnsaved edits in this classroom will also be lost.");
+        int answer = JOptionPane.showConfirmDialog(
+            this,
+            message,
+            "Delete Classroom",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (answer != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        deletingClassroom = true;
+        autosave.stop();
+        rooms.setEnabled(false);
+        createRoomButton.setEnabled(false);
+        deleteRoomButton.setEnabled(false);
+        copyCodeButton.setEnabled(false);
+        status.setText("Deleting classroom…");
+        new SwingWorker<ClassroomService.Classroom, Void>() {
+            @Override
+            protected ClassroomService.Classroom doInBackground() throws IOException {
+                service.deleteClassroom(room.id());
+                return room;
+            }
+
+            @Override
+            protected void done() {
+                deletingClassroom = false;
+                rooms.setEnabled(true);
+                createRoomButton.setEnabled(true);
+                try {
+                    ClassroomService.Classroom deleted = get();
+                    if (activeRoom == null || !activeRoom.id().equals(deleted.id())) {
+                        return;
+                    }
+                    closeRealtime();
+                    if (explorer != null) {
+                        explorer.close();
+                        explorer = null;
+                    }
+                    activeRoom = null;
+                    clearEditors();
+                    roomCode.setText("");
+                    roomCode.setForeground(IdeTheme.TEXT);
+                    memberCount.setText("0 connected");
+                    explorerHolder.removeAll();
+                    JLabel emptyExplorer =
+                        new JLabel("  Create or select a classroom", JLabel.LEFT);
+                    emptyExplorer.setForeground(IdeTheme.MUTED);
+                    explorerHolder.add(emptyExplorer, BorderLayout.NORTH);
+                    explorerHolder.revalidate();
+                    explorerHolder.repaint();
+
+                    suppressRoomSelection = true;
+                    rooms.removeItem(deleted);
+                    suppressRoomSelection = false;
+                    copyCodeButton.setEnabled(false);
+                    updateDeleteButton();
+                    Object selected = rooms.getSelectedItem();
+                    if (selected instanceof ClassroomService.Classroom nextRoom) {
+                        switchRoom(nextRoom);
+                    } else {
+                        status.setText("Classroom deleted");
+                    }
+                } catch (Exception exception) {
+                    if (!dirty.isEmpty()) {
+                        autosave.restart();
+                    }
+                    updateDeleteButton();
+                    copyCodeButton.setEnabled(activeRoom != null);
+                    status.setText("Classroom deletion failed: " + rootMessage(exception));
+                    showError("Could not delete classroom:\n" + rootMessage(exception));
+                }
+            }
+        }.execute();
+    }
+
+    private void updateDeleteButton() {
+        deleteRoomButton.setEnabled(!deletingClassroom && activeRoom != null);
+    }
+
     private void switchRoom(ClassroomService.Classroom room) {
         if (!dirty.isEmpty() && activeRoom != null) {
             int answer = JOptionPane.showConfirmDialog(
@@ -301,6 +413,8 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             explorer.close();
         }
         activeRoom = room;
+        updateDeleteButton();
+        copyCodeButton.setEnabled(true);
         clearEditors();
         roomCode.setText(room.joinCode());
         boolean legacyCode = RoomCode.isLegacy(room.joinCode());
@@ -432,7 +546,9 @@ public class CloudTeacherApp extends javax.swing.JFrame {
                 dirty.add(editor);
                 editGenerations.merge(editor, 1L, Long::sum);
                 status.setText("Unsaved changes — saving…");
-                autosave.restart();
+                if (!deletingClassroom) {
+                    autosave.restart();
+                }
             }
             @Override public void insertUpdate(DocumentEvent event) { changed(); }
             @Override public void removeUpdate(DocumentEvent event) { changed(); }
@@ -450,7 +566,8 @@ public class CloudTeacherApp extends javax.swing.JFrame {
     }
 
     private void saveEditor(CodeEditor editor) {
-        if (activeRoom == null || saving.contains(editor) || !dirty.contains(editor)) {
+        if (deletingClassroom || activeRoom == null
+                || saving.contains(editor) || !dirty.contains(editor)) {
             return;
         }
         String path = paths.get(editor);
@@ -481,9 +598,12 @@ public class CloudTeacherApp extends javax.swing.JFrame {
                 try {
                     WorkspaceFile saved = get();
                     savedFiles.put(editor, saved);
+                    boolean mirrored = mirrorTeacherFile(roomId, path, saved.content());
                     if (generation == editGenerations.getOrDefault(editor, 0L)) {
                         dirty.remove(editor);
-                        status.setText("Saved " + path + " · version " + saved.version());
+                        if (mirrored) {
+                            status.setText("Saved " + path + " · version " + saved.version());
+                        }
                     } else {
                         autosave.restart();
                     }
@@ -521,6 +641,8 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             }
         }
         if (editor == null) {
+            mirrorTeacherFile(
+                incoming.classroomId(), incoming.path(), incoming.content());
             return;
         }
         WorkspaceFile current = savedFiles.get(editor);
@@ -531,7 +653,12 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             if (incoming.content().equals(editor.getText())) {
                 savedFiles.put(editor, incoming);
                 dirty.remove(editor);
-                status.setText("Saved " + incoming.path() + " · version " + incoming.version());
+                boolean mirrored = mirrorTeacherFile(
+                    incoming.classroomId(), incoming.path(), incoming.content());
+                if (mirrored) {
+                    status.setText(
+                        "Saved " + incoming.path() + " · version " + incoming.version());
+                }
                 return;
             }
             Object[] options = {"Reload remote", "Keep my edits", "Later"};
@@ -552,7 +679,11 @@ public class CloudTeacherApp extends javax.swing.JFrame {
                 suppressChanges.remove(editor);
                 dirty.remove(editor);
                 savedFiles.put(editor, incoming);
-                status.setText("Reloaded remote version of " + incoming.path());
+                boolean mirrored = mirrorTeacherFile(
+                    incoming.classroomId(), incoming.path(), incoming.content());
+                if (mirrored) {
+                    status.setText("Reloaded remote version of " + incoming.path());
+                }
             } else if (choice == 1) {
                 savedFiles.put(editor, incoming);
                 saveEditor(editor);
@@ -565,10 +696,14 @@ public class CloudTeacherApp extends javax.swing.JFrame {
         editor.setText(incoming.content());
         suppressChanges.remove(editor);
         savedFiles.put(editor, incoming);
-        status.setText("Updated from classroom: " + incoming.path());
+        if (mirrorTeacherFile(
+                incoming.classroomId(), incoming.path(), incoming.content())) {
+            status.setText("Updated from classroom: " + incoming.path());
+        }
     }
 
     private void remoteDelete(String path) {
+        ClassroomService.Classroom room = activeRoom;
         CodeEditor editor = editors.get(path);
         if (editor != null) {
             if (dirty.contains(editor)) {
@@ -584,6 +719,9 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             paths.remove(editor);
             savedFiles.remove(editor);
             status.setText("File deleted remotely: " + path);
+        }
+        if (room != null) {
+            removeMirroredTeacherFile(room.id(), path);
         }
     }
 
@@ -633,6 +771,67 @@ public class CloudTeacherApp extends javax.swing.JFrame {
             }
         }
         return sources;
+    }
+
+    private Path teacherWorkspaceDirectory() {
+        ClassroomService.Classroom room = activeRoom;
+        if (room == null) {
+            return TerminalPanel.defaultWorkingDirectory();
+        }
+        try {
+            return ensureTeacherWorkspaceDirectory(room.id());
+        } catch (IOException exception) {
+            throw new UncheckedIOException(exception);
+        }
+    }
+
+    private static Path ensureTeacherWorkspaceDirectory(UUID roomId) throws IOException {
+        Path root = Path.of(System.getProperty("user.home"), ".feric", "workspaces",
+            "teacher", roomId.toString()).toAbsolutePath().normalize();
+        Files.createDirectories(root);
+        if (Files.isSymbolicLink(root)) {
+            throw new IOException("Teacher workspace cannot be a symbolic link");
+        }
+        return root;
+    }
+
+    private boolean mirrorTeacherFile(UUID roomId, String relativePath, String content) {
+        try {
+            Path root = ensureTeacherWorkspaceDirectory(roomId);
+            Path target = root.resolve(WorkspacePath.normalize(relativePath)).normalize();
+            if (!target.startsWith(root)) {
+                throw new IOException("Classroom file path escapes the local workspace");
+            }
+            Path parent = root;
+            for (Path segment : root.relativize(target.getParent())) {
+                parent = parent.resolve(segment);
+                if (Files.isSymbolicLink(parent)) {
+                    throw new IOException("Teacher workspace contains a symbolic-link folder");
+                }
+                Files.createDirectories(parent);
+            }
+            if (Files.isSymbolicLink(target)) {
+                throw new IOException("Teacher workspace file cannot be a symbolic link");
+            }
+            Files.writeString(target, content, StandardCharsets.UTF_8);
+            return true;
+        } catch (IOException | IllegalArgumentException exception) {
+            status.setText("Could not update terminal workspace: " + exception.getMessage());
+            return false;
+        }
+    }
+
+    private void removeMirroredTeacherFile(UUID roomId, String relativePath) {
+        try {
+            Path root = ensureTeacherWorkspaceDirectory(roomId);
+            Path target = root.resolve(WorkspacePath.normalize(relativePath)).normalize();
+            if (!target.startsWith(root) || Files.isSymbolicLink(target)) {
+                throw new IOException("Invalid local classroom file path");
+            }
+            Files.deleteIfExists(target);
+        } catch (IOException | IllegalArgumentException exception) {
+            status.setText("Could not remove terminal workspace file: " + exception.getMessage());
+        }
     }
 
     private void selectEditor(CodeEditor editor) {

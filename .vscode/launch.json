@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "TeacherApp",
+      "request": "launch",
+      "mainClass": "com.classroom.live.TeacherApp",
+      "projectName": "teacher-classroom"
+    },
+    {
+      "type": "java",
+      "name": "Feric",
+      "request": "launch",
+      "mainClass": "com.classroom.live.AppLauncher",
+      "classPaths": [
+        "${workspaceFolder}/target/teacher-classroom-1.0.0.jar"
+      ],
+      "preLaunchTask": "Feric: package app",
+      "vmArgs": "--add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED"
+    }
+  ]
+}

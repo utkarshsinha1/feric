@@ -11,9 +11,11 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JList;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.JTextField;
 import javax.swing.UIManager;
 import javax.swing.plaf.basic.BasicComboBoxUI;
 import javax.swing.plaf.basic.BasicScrollBarUI;
@@ -29,8 +31,11 @@ public final class IdeTheme {
     public static final Color BORDER = new Color(52, 52, 54);
     public static final Color TEXT = new Color(215, 215, 216);
     public static final Color MUTED = new Color(160, 160, 162);
-    public static final Color ACCENT = new Color(126, 163, 193);
-    public static final Color SELECTION = new Color(66, 82, 96);
+    public static final Color ACCENT = new Color(88, 166, 255);
+    public static final Color SELECTION = new Color(44, 72, 101);
+    public static final Color INPUT = new Color(24, 24, 25);
+    public static final Color COLLABORATION_GREEN = new Color(35, 134, 54);
+    public static final Color COLLABORATION_HIGHLIGHT = new Color(35, 134, 54, 78);
     public static final Color SUCCESS = new Color(143, 177, 147);
 
     public static final Font UI_FONT = new Font("SansSerif", Font.PLAIN, 12);
@@ -54,6 +59,14 @@ public final class IdeTheme {
         UIManager.put("TextField.background", EDITOR);
         UIManager.put("TextField.foreground", TEXT);
         UIManager.put("TextField.caretForeground", TEXT);
+        UIManager.put("TextField.selectionBackground", SELECTION);
+        UIManager.put("PasswordField.background", EDITOR);
+        UIManager.put("PasswordField.foreground", TEXT);
+        UIManager.put("PasswordField.caretForeground", TEXT);
+        UIManager.put("PasswordField.selectionBackground", SELECTION);
+        UIManager.put("TextArea.background", EDITOR);
+        UIManager.put("TextArea.foreground", TEXT);
+        UIManager.put("TextArea.caretForeground", TEXT);
         UIManager.put("ComboBox.background", PANEL);
         UIManager.put("ComboBox.foreground", TEXT);
         UIManager.put("ComboBox.selectionBackground", SELECTION);
@@ -61,6 +74,11 @@ public final class IdeTheme {
         UIManager.put("TabbedPane.background", SIDEBAR);
         UIManager.put("TabbedPane.foreground", TEXT);
         UIManager.put("TabbedPane.selected", EDITOR);
+        UIManager.put("TabbedPane.contentAreaColor", EDITOR);
+        UIManager.put("TabbedPane.darkShadow", BACKGROUND);
+        UIManager.put("TabbedPane.shadow", BORDER);
+        UIManager.put("TabbedPane.highlight", BORDER);
+        UIManager.put("TabbedPane.focus", ACCENT);
         UIManager.put("ScrollBarUI", DarkScrollBarUI.class.getName());
         UIManager.put("SplitPaneUI", DarkSplitPaneUI.class.getName());
         UIManager.put("ScrollBar.thumb", new Color(75, 75, 75));
@@ -70,6 +88,11 @@ public final class IdeTheme {
         UIManager.put("SplitPane.dividerSize", 6);
         UIManager.put("OptionPane.background", PANEL);
         UIManager.put("OptionPane.messageForeground", TEXT);
+        UIManager.put("Dialog.background", BACKGROUND);
+        UIManager.put("Component.focusColor", ACCENT);
+        UIManager.put("Component.borderColor", BORDER);
+        UIManager.put("Separator.foreground", BORDER);
+        UIManager.put("Separator.background", BORDER);
     }
 
     public static void styleButton(JButton button) {
@@ -77,8 +100,36 @@ public final class IdeTheme {
         button.setForeground(TEXT);
         button.setBackground(PANEL);
         button.setFocusPainted(false);
-        button.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
+        button.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER),
+            BorderFactory.createEmptyBorder(6, 10, 6, 10)));
         button.setOpaque(true);
+    }
+
+    public static void stylePrimaryButton(JButton button) {
+        button.setFont(UI_FONT.deriveFont(Font.BOLD));
+        button.setForeground(new Color(16, 20, 24));
+        button.setBackground(ACCENT);
+        button.setFocusPainted(false);
+        button.setBorder(BorderFactory.createEmptyBorder(8, 16, 8, 16));
+        button.setOpaque(true);
+    }
+
+    public static void styleTextField(JTextField field) {
+        field.setFont(UI_FONT);
+        field.setBackground(INPUT);
+        field.setForeground(TEXT);
+        field.setCaretColor(TEXT);
+        field.setSelectionColor(SELECTION);
+        field.setSelectedTextColor(TEXT);
+        field.setBorder(BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(BORDER),
+            BorderFactory.createEmptyBorder(8, 10, 8, 10)));
+    }
+
+    public static void styleDialog(JDialog dialog) {
+        dialog.getContentPane().setBackground(BACKGROUND);
+        dialog.getRootPane().setBorder(BorderFactory.createLineBorder(BORDER));
     }
 
     public static JScrollPane styleScrollPane(JScrollPane scrollPane) {

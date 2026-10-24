@@ -19,7 +19,9 @@ class WorkspacePathTest {
     void rejectsPathsThatCanEscapeOrAliasTheWorkspace() {
         for (String path : new String[] {
                 "", "/etc/passwd", "../secret.txt", "src/../secret.txt",
-                "src//Main.java", "./Main.java", "src\\Main.java", "src/.."}) {
+                "src//Main.java", "./Main.java", "src\\Main.java", "src/..",
+                "C:/Users/test/Desktop/secret.txt", "C:temp/secret.txt",
+                "folder:notes.txt"}) {
             assertThrows(IllegalArgumentException.class, () -> WorkspacePath.normalize(path), path);
         }
     }

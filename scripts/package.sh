@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 
+ARCH_OVERRIDE=${1:-}
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 APP_NAME=Feric
 APP_VERSION=1.0.0
@@ -8,6 +9,24 @@ JAR_NAME=teacher-classroom-${APP_VERSION}.jar
 DIST_DIR="$ROOT_DIR/dist"
 INPUT_DIR="$ROOT_DIR/target/jpackage-input"
 PNG_ICON="$ROOT_DIR/logos/feric-app-icon.png"
+TARGET_OS=$(uname -s)
+TARGET_ARCH=$(uname -m)
+case "$TARGET_OS" in
+  Darwin) OS_TAG=macos ;;
+  Linux) OS_TAG=linux ;;
+  *) OS_TAG=windows ;;
+esac
+case "$TARGET_ARCH" in
+  arm64|aarch64) ARCH_TAG=arm64 ;;
+  *) ARCH_TAG=x64 ;;
+esac
+if [ -n "$ARCH_OVERRIDE" ]; then
+  ARCH_TAG="$ARCH_OVERRIDE"
+fi
+BUILD_SUFFIX="${OS_TAG}-${ARCH_TAG}"
+MACOS_ZIP="$DIST_DIR/${APP_NAME}-macos-${ARCH_TAG}.zip"
+LINUX_ZIP="$DIST_DIR/${APP_NAME}-linux-${ARCH_TAG}.zip"
+WINDOWS_ZIP="$DIST_DIR/${APP_NAME}-windows-${ARCH_TAG}.zip"
 
 cd "$ROOT_DIR"
 if [ -n "${JAVA_HOME:-}" ]; then
@@ -28,16 +47,16 @@ JPACKAGE_RUNTIME=$RUNTIME_IMAGE
 if [ "$(uname -s)" = "Linux" ]; then
   JPACKAGE_RUNTIME="$ROOT_DIR/target/feric-runtime"
   "$RUNTIME_IMAGE/bin/jlink" \
-    --add-modules java.desktop,java.net.http,jdk.compiler,jdk.crypto.ec \
+    --add-modules java.desktop,java.net.http,jdk.compiler,jdk.crypto.ec,jdk.httpserver \
     --output "$JPACKAGE_RUNTIME"
 fi
 
 mkdir -p "$DIST_DIR"
 rm -rf "$INPUT_DIR" "$DIST_DIR/$APP_NAME" "$DIST_DIR/${APP_NAME}.app"
-rm -f "$DIST_DIR/${APP_NAME}-macOS.zip" "$DIST_DIR/${APP_NAME}-Linux.zip"
+rm -f "$MACOS_ZIP" "$LINUX_ZIP" "$WINDOWS_ZIP"
 mkdir -p "$INPUT_DIR"
 cp "$ROOT_DIR/target/$JAR_NAME" "$INPUT_DIR/$JAR_NAME"
-if [ "$(uname -s)" = "Darwin" ]; then
+if [ "$TARGET_OS" = "Darwin" ]; then
   xattr -cr "$INPUT_DIR"
   ICONSET="$ROOT_DIR/target/Feric.iconset"
   mkdir -p "$ICONSET"
@@ -83,24 +102,24 @@ jpackage \
   --java-options "--add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED" \
   --dest "$PACKAGE_DEST"
 
-if [ "$(uname -s)" = "Darwin" ]; then
+if [ "$TARGET_OS" = "Darwin" ]; then
   codesign --verify --deep --strict "$PACKAGE_DEST/${APP_NAME}.app"
   ditto -c -k --sequesterRsrc --keepParent \
     "$PACKAGE_DEST/${APP_NAME}.app" \
-    "$DIST_DIR/${APP_NAME}-macOS.zip"
+    "$MACOS_ZIP"
   ditto "$PACKAGE_DEST/${APP_NAME}.app" "$DIST_DIR/${APP_NAME}.app"
   strip_finder_info "$DIST_DIR/${APP_NAME}.app"
-else
-  if [ "$(uname -s)" = "Linux" ]; then
-    APP_RUNTIME="$DIST_DIR/$APP_NAME/lib/runtime"
-    if [ ! -d "$APP_RUNTIME" ]; then
-      printf 'jpackage did not create the Linux runtime directory: %s\n' "$APP_RUNTIME" >&2
-      exit 1
-    fi
-    rm -rf "$APP_RUNTIME"
-    cp -a "$RUNTIME_IMAGE" "$APP_RUNTIME"
+elif [ "$TARGET_OS" = "Linux" ]; then
+  APP_RUNTIME="$DIST_DIR/$APP_NAME/lib/runtime"
+  if [ ! -d "$APP_RUNTIME" ]; then
+    printf 'jpackage did not create the Linux runtime directory: %s\n' "$APP_RUNTIME" >&2
+    exit 1
   fi
-  zip -qr "$DIST_DIR/${APP_NAME}-Linux.zip" "$DIST_DIR/$APP_NAME"
+  rm -rf "$APP_RUNTIME"
+  cp -a "$RUNTIME_IMAGE" "$APP_RUNTIME"
+  zip -qr "$LINUX_ZIP" "$DIST_DIR/$APP_NAME"
+else
+  zip -qr "$WINDOWS_ZIP" "$DIST_DIR/$APP_NAME"
 fi
 
-printf 'App image created in %s\n' "$DIST_DIR"
+printf 'App image created in %s (%s)\n' "$DIST_DIR" "$BUILD_SUFFIX"

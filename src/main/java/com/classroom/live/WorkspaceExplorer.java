@@ -9,6 +9,7 @@ import java.awt.event.MouseEvent;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
@@ -25,8 +26,10 @@ import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
 import javax.swing.SwingUtilities;
@@ -48,15 +51,22 @@ public final class WorkspaceExplorer extends JPanel {
     private final DefaultTreeModel treeModel = new DefaultTreeModel(rootNode);
     private final JTree tree = new JTree(treeModel);
     private final Consumer<Path> openFile;
+    private final Consumer<Path> fileDeleted;
     private final ConcurrentHashMap<Path, WatchKey> watchedDirectories =
         new ConcurrentHashMap<>();
     private Path workspace;
     private volatile WatchService watchService;
 
     public WorkspaceExplorer(Path initialWorkspace, Consumer<Path> openFile) {
+        this(initialWorkspace, openFile, path -> {});
+    }
+
+    public WorkspaceExplorer(
+            Path initialWorkspace, Consumer<Path> openFile, Consumer<Path> fileDeleted) {
         super(new BorderLayout(0, 8));
         this.workspace = initialWorkspace.toAbsolutePath().normalize();
         this.openFile = openFile;
+        this.fileDeleted = fileDeleted;
         setBackground(IdeTheme.SIDEBAR);
         setPreferredSize(new Dimension(175, 300));
         setMinimumSize(new Dimension(130, 150));
@@ -76,13 +86,16 @@ public final class WorkspaceExplorer extends JPanel {
         JButton newFolder = actionButton("▣", "New folder");
         JButton refresh = actionButton("↻", "Refresh");
         JButton openFolder = actionButton("▱", "Open folder");
+        JButton delete = actionButton("⌫", "Delete the selected file or folder");
         newFile.addActionListener(event -> createEntry(false));
         newFolder.addActionListener(event -> createEntry(true));
         refresh.addActionListener(event -> refresh());
         openFolder.addActionListener(event -> chooseWorkspace());
+        delete.addActionListener(event -> deleteSelected());
         actions.add(newFile);
         actions.add(newFolder);
         actions.add(refresh);
+        actions.add(delete);
         actions.add(openFolder);
         heading.add(actions, BorderLayout.EAST);
 
@@ -100,7 +113,13 @@ public final class WorkspaceExplorer extends JPanel {
         tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent event) {
-                if (event.getClickCount() == 2) {
+                if (javax.swing.SwingUtilities.isRightMouseButton(event)) {
+                    TreePath path = tree.getPathForLocation(event.getX(), event.getY());
+                    if (path != null) {
+                        tree.setSelectionPath(path);
+                        showContextMenu(event.getX(), event.getY());
+                    }
+                } else if (event.getClickCount() == 2) {
                     TreePath path = tree.getPathForLocation(event.getX(), event.getY());
                     if (path == null) {
                         return;
@@ -235,10 +254,10 @@ public final class WorkspaceExplorer extends JPanel {
     private static List<FileEntry> listEntries(Path directory) throws IOException {
         List<FileEntry> entries = new ArrayList<>();
         try (var children = Files.list(directory)) {
-            children.filter(path -> !Files.isDirectory(path)
+            children.filter(path -> !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
                     || !SKIPPED_DIRECTORIES.contains(path.getFileName().toString()))
                 .forEach(path -> entries.add(new FileEntry(
-                    path.toFile(), Files.isDirectory(path), false
+                    path.toFile(), Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS), false
                 )));
         }
         entries.sort(Comparator
@@ -415,6 +434,99 @@ public final class WorkspaceExplorer extends JPanel {
         }
     }
 
+    private void showContextMenu(int x, int y) {
+        if (selectedEntry() == null) {
+            return;
+        }
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem delete = new JMenuItem("Delete…");
+        delete.addActionListener(event -> deleteSelected());
+        menu.add(delete);
+        menu.show(tree, x, y);
+    }
+
+    private void deleteSelected() {
+        FileEntry entry = selectedEntry();
+        if (entry == null) {
+            showError("Select a file or folder to delete.");
+            return;
+        }
+        Path root = workspace.toAbsolutePath().normalize();
+        Path target = entry.file().toPath().toAbsolutePath().normalize();
+        if (target.equals(root) || !target.startsWith(root)) {
+            showError("The workspace root cannot be deleted.");
+            return;
+        }
+        boolean directory = Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS);
+        int answer = JOptionPane.showConfirmDialog(
+            this,
+            directory
+                ? "Delete this folder and everything inside it?\n" + root.relativize(target)
+                : "Delete this file?\n" + root.relativize(target),
+            "Delete Workspace Item",
+            JOptionPane.YES_NO_OPTION,
+            JOptionPane.WARNING_MESSAGE
+        );
+        if (answer != JOptionPane.YES_OPTION) {
+            return;
+        }
+        new SwingWorker<Void, Void>() {
+            @Override
+            protected Void doInBackground() throws IOException {
+                if (!root.equals(workspace) || !target.startsWith(root)
+                        || target.equals(root)
+                        || hasSymbolicLinkParent(root, target)
+                        || !Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IOException("The selected workspace item no longer exists");
+                }
+                try (var items = Files.walk(target)) {
+                    for (Path item : items.sorted(Comparator.reverseOrder()).toList()) {
+                        Files.delete(item);
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    get();
+                    fileDeleted.accept(target);
+                    Path parent = target.getParent();
+                    if (parent != null) {
+                        refreshNode(parent);
+                    } else {
+                        refresh();
+                    }
+                } catch (Exception exception) {
+                    showError("Could not delete workspace item: " + message(exception));
+                }
+            }
+        }.execute();
+    }
+
+    private static boolean hasSymbolicLinkParent(Path root, Path target) {
+        Path current = root;
+        Path relative = root.relativize(target);
+        for (int index = 0; index < relative.getNameCount() - 1; index++) {
+            current = current.resolve(relative.getName(index));
+            if (Files.isSymbolicLink(current)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private FileEntry selectedEntry() {
+        TreePath selection = tree.getSelectionPath();
+        if (selection == null) {
+            return null;
+        }
+        Object value = ((DefaultMutableTreeNode) selection.getLastPathComponent())
+            .getUserObject();
+        return value instanceof FileEntry entry ? entry : null;
+    }
+
     private static JButton actionButton(String label, String description) {
         JButton button = new JButton(label);
         IdeTheme.styleButton(button);
@@ -429,6 +541,12 @@ public final class WorkspaceExplorer extends JPanel {
 
     private void showError(String message) {
         JOptionPane.showMessageDialog(this, message, "Explorer", JOptionPane.ERROR_MESSAGE);
+    }
+
+    private static String message(Exception exception) {
+        Throwable cause = exception.getCause();
+        return cause != null && cause.getMessage() != null
+            ? cause.getMessage() : exception.getMessage();
     }
 
     private static final class FileEntry {

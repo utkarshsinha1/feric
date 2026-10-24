@@ -16,13 +16,20 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: feric-linux
+            artifact: feric-linux-x64
+            arch: x64
+          - os: ubuntu-22.04-arm
+            artifact: feric-linux-arm64
+            arch: arm64
           - os: windows-latest
-            artifact: feric-windows
+            artifact: feric-windows-x64
+            arch: x64
           - os: macos-latest
             artifact: feric-macos-arm64
+            arch: arm64
           - os: macos-15-intel
             artifact: feric-macos-x64
+            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -33,15 +40,15 @@ jobs:
           cache: maven
       - name: Package native app image
         if: runner.os != 'Windows'
-        run: sh scripts/package.sh
+        run: sh scripts/package.sh "${{ matrix.arch }}"
       - name: Package native app image
         if: runner.os == 'Windows'
         shell: pwsh
-        run: .\scripts\package.ps1
+        run: .\scripts\package.ps1 -Architecture "${{ matrix.arch }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: dist/Feric-*.zip
+          path: dist/*.zip
           if-no-files-found: error
 
   release:

@@ -48,6 +48,12 @@ public final class ClassroomService {
         return classroom(result.get(0));
     }
 
+    public void deleteClassroom(UUID classroomId) throws IOException {
+        ObjectNode request = JSON.createObjectNode()
+            .put("p_classroom_id", classroomId.toString());
+        client.rpc("delete_classroom", request);
+    }
+
     public UUID join(String joinCode) throws IOException {
         String email = client.userEmail();
         int atIndex = email.indexOf('@');

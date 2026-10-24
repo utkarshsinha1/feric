@@ -84,6 +84,8 @@ public final class RemoteWorkspaceExplorer extends JPanel {
         if (!readOnly) {
             actions.add(action("+", "New file", () -> createEntry(false)));
             actions.add(action("▣", "New folder", () -> createEntry(true)));
+            actions.add(action("⌫", "Delete the selected file or folder",
+                () -> deleteEntry(selectedPath())));
         }
         actions.add(action("↻", "Refresh from server", this::refresh));
         heading.add(actions, BorderLayout.EAST);
@@ -378,6 +380,10 @@ public final class RemoteWorkspaceExplorer extends JPanel {
     }
 
     private void deleteEntry(String path) {
+        if (path == null || path.isBlank()) {
+            statusChanged.accept("Select a workspace item to delete");
+            return;
+        }
         boolean directory = folders.contains(path);
         int answer = JOptionPane.showConfirmDialog(
             this, directory
@@ -483,6 +489,9 @@ public final class RemoteWorkspaceExplorer extends JPanel {
                 setForeground(selected ? IdeTheme.TEXT
                     : entry.directory() ? IdeTheme.TEXT : IdeTheme.MUTED);
             }
+            setOpaque(true);
+            setBackground(selected
+                ? IdeTheme.COLLABORATION_GREEN : IdeTheme.SIDEBAR);
             return this;
         }
     }

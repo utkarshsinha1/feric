@@ -12,13 +12,14 @@ public final class WorkspacePath {
         Objects.requireNonNull(raw, "Workspace path is required");
         if (raw.isBlank() || raw.length() > 1024 || raw.indexOf('\\') >= 0
                 || raw.startsWith("/") || raw.endsWith("/")
-                || raw.chars().anyMatch(Character::isISOControl)) {
+                || raw.chars().anyMatch(Character::isISOControl)
+                || raw.contains(":")) {
             throw new IllegalArgumentException("Invalid workspace-relative path");
         }
         String[] parts = raw.split("/", -1);
         for (String part : parts) {
             if (part.isBlank() || part.equals(".") || part.equals("..")
-                    || part.length() > 255) {
+                    || part.length() > 255 || part.contains(":")) {
                 throw new IllegalArgumentException("Invalid workspace-relative path");
             }
         }

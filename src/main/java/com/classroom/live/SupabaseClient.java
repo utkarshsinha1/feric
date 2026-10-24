@@ -55,6 +55,30 @@ public final class SupabaseClient {
         return response;
     }
 
+    public void requestPasswordReset(String email, URI redirectTo) throws IOException {
+        ObjectNode body = JSON.createObjectNode().put("email", email);
+        String encodedRedirect = URLEncoder.encode(
+            redirectTo.toString(), StandardCharsets.UTF_8);
+        sendAuth("/auth/v1/recover?redirect_to=" + encodedRedirect, body);
+    }
+
+    public void updatePassword(String recoveryAccessToken, char[] password)
+            throws IOException {
+        if (recoveryAccessToken == null || recoveryAccessToken.isBlank()) {
+            throw new IllegalArgumentException("A recovery token is required");
+        }
+        ObjectNode body = JSON.createObjectNode().put("password", new String(password));
+        HttpRequest request = HttpRequest.newBuilder(
+                URI.create(config.projectUrl() + "/auth/v1/user"))
+            .timeout(Duration.ofSeconds(30))
+            .header("apikey", config.publishableKey())
+            .header("Authorization", "Bearer " + recoveryAccessToken)
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString(body.toString()))
+            .build();
+        send(request);
+    }
+
     public synchronized void signOut() {
         session = null;
     }
@@ -65,6 +89,10 @@ public final class SupabaseClient {
 
     public String userEmail() throws IOException {
         return requireSession().email();
+    }
+
+    public synchronized String signedInEmail() {
+        return session == null ? "" : session.email();
     }
 
     public String accessToken() throws IOException {
@@ -147,6 +175,11 @@ public final class SupabaseClient {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IOException("Supabase request was interrupted", exception);
+        } catch (NoClassDefFoundError | ExceptionInInitializerError error) {
+            throw new IOException(
+                "Required runtime dependency missing: Jackson is not available. "
+                    + "Rebuild the app or restore the project dependencies.",
+                error);
         }
     }
 

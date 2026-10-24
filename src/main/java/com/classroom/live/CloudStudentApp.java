@@ -6,6 +6,8 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Dimension;
+import java.awt.Point;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
@@ -28,6 +30,7 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.JViewport;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
@@ -198,10 +201,12 @@ public class CloudStudentApp extends javax.swing.JFrame {
         workspaces.setOneTouchExpandable(true);
 
         JPanel compiler = CompilerPanel.create(
-            () -> activePersonalEditor, this::personalProjectSources);
+            () -> activePersonalEditor, this::personalProjectSources,
+            () -> personalRoot == null
+                ? TerminalPanel.defaultWorkingDirectory() : personalRoot);
         JSplitPane vertical = new JSplitPane(JSplitPane.VERTICAL_SPLIT, workspaces, compiler);
         IdeTheme.styleSplitPane(vertical);
-        vertical.setResizeWeight(0.72);
+        vertical.setResizeWeight(0.68);
         JPanel footer = new JPanel(new BorderLayout());
         footer.setBackground(IdeTheme.PANEL);
         footer.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, IdeTheme.BORDER));
@@ -212,15 +217,20 @@ public class CloudStudentApp extends javax.swing.JFrame {
         local.setForeground(IdeTheme.MUTED);
         local.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 12));
         footer.add(local, BorderLayout.EAST);
-        root.add(top, BorderLayout.NORTH);
-        root.add(vertical, BorderLayout.CENTER);
-        root.add(footer, BorderLayout.SOUTH);
+        JPanel workspace = new JPanel(new BorderLayout());
+        workspace.setBackground(IdeTheme.BACKGROUND);
+        workspace.add(top, BorderLayout.NORTH);
+        workspace.add(vertical, BorderLayout.CENTER);
+        workspace.add(footer, BorderLayout.SOUTH);
+        root.add(new AccountControls(this, client, "Student account"), BorderLayout.WEST);
+        root.add(workspace, BorderLayout.CENTER);
         setContentPane(root);
         SwingUtilities.invokeLater(() -> {
             if (isDisplayable()) {
                 sharedSplit.setDividerLocation(0.18);
                 personalSplit.setDividerLocation(0.18);
                 workspaces.setDividerLocation(0.5);
+                vertical.setDividerLocation(0.68);
             }
         });
     }
@@ -332,7 +342,8 @@ public class CloudStudentApp extends javax.swing.JFrame {
             return;
         }
         loadPersonalWorkspaceCache();
-        personalExplorer = new WorkspaceExplorer(personalRoot, this::openPersonalFile);
+        personalExplorer = new WorkspaceExplorer(
+            personalRoot, this::openPersonalFile, this::removePersonalFile);
         roomLabel.setText(activeRoom.name() + "  ·  SHARED VIEW");
         sharedExplorer = new RemoteWorkspaceExplorer(
             service, roomId, true, true, this::openSharedFile, this::applySharedFile,
@@ -496,8 +507,29 @@ public class CloudStudentApp extends javax.swing.JFrame {
     private void applySharedFile(WorkspaceFile file) {
         CodeEditor editor = sharedEditors.get(file.path());
         if (editor != null) {
+            String previousContent = editor.getText();
+            if (previousContent.equals(file.content())) {
+                return;
+            }
+            JViewport viewport = (JViewport) SwingUtilities.getAncestorOfClass(
+                JViewport.class, editor);
+            Point previousViewPosition = viewport == null
+                ? null : viewport.getViewPosition();
+            int previousCaretPosition = editor.getCaretPosition();
             editor.setText(file.content());
-            editor.setCaretPosition(0);
+            editor.setCaretPosition(Math.min(previousCaretPosition, editor.getDocument().getLength()));
+            editor.highlightTeacherChanges(previousContent, file.content());
+            if (viewport != null && previousViewPosition != null) {
+                SwingUtilities.invokeLater(() -> {
+                    Dimension viewSize = viewport.getViewSize();
+                    Dimension extentSize = viewport.getExtentSize();
+                    int maxX = Math.max(0, viewSize.width - extentSize.width);
+                    int maxY = Math.max(0, viewSize.height - extentSize.height);
+                    viewport.setViewPosition(new Point(
+                        Math.min(previousViewPosition.x, maxX),
+                        Math.min(previousViewPosition.y, maxY)));
+                });
+            }
             status.setText("Shared file updated: " + file.path());
         }
     }
@@ -574,6 +606,43 @@ public class CloudStudentApp extends javax.swing.JFrame {
             @Override public void removeUpdate(DocumentEvent event) { changed(); }
             @Override public void changedUpdate(DocumentEvent event) { changed(); }
         });
+    }
+
+    private void removePersonalFile(Path deletedPath) {
+        Path root = personalRoot;
+        if (root == null || !deletedPath.toAbsolutePath().normalize().startsWith(root)) {
+            return;
+        }
+        personalSaveTimer.stop();
+        String removedPath = root.relativize(deletedPath.toAbsolutePath().normalize())
+            .toString().replace('\\', '/');
+        for (String path : Set.copyOf(personalEditors.keySet())) {
+            if (path.equals(removedPath) || path.startsWith(removedPath + "/")) {
+                personalSourceCache.remove(path);
+                CodeEditor editor = personalEditors.remove(path);
+                if (editor != null) {
+                    int index = personalTabIndex(editor);
+                    if (index >= 0) {
+                        personalTabs.removeTabAt(index);
+                    }
+                }
+            }
+        }
+        if (personalTabs.getTabCount() == 0) {
+            setEmptyState(personalTabs, "Your editable code appears here",
+                "Click a teacher file to open your own local copy beside it.");
+        }
+        status.setText("Deleted personal workspace item: " + removedPath);
+    }
+
+    private int personalTabIndex(CodeEditor editor) {
+        for (int index = 0; index < personalTabs.getTabCount(); index++) {
+            Component component = personalTabs.getComponentAt(index);
+            if (component instanceof EditorTab tab && tab.editor() == editor) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private void writePersonalFile(Path root, String relativePath, String contents)
@@ -717,12 +786,7 @@ public class CloudStudentApp extends javax.swing.JFrame {
     }
 
     private static void styleField(JTextField field) {
-        field.setBackground(IdeTheme.EDITOR);
-        field.setForeground(IdeTheme.TEXT);
-        field.setCaretColor(IdeTheme.TEXT);
-        field.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(IdeTheme.BORDER),
-            BorderFactory.createEmptyBorder(4, 7, 4, 7)));
+        IdeTheme.styleTextField(field);
     }
 
     private void installIcon() {

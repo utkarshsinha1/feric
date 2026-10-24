@@ -1,3 +1,7 @@
+param(
+    [string]$Architecture = "x64"
+)
+
 $ErrorActionPreference = "Stop"
 
 $RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -7,6 +11,11 @@ $JarName = "teacher-classroom-$AppVersion.jar"
 $DistDir = Join-Path $RootDir "dist"
 $InputDir = Join-Path $RootDir "target\jpackage-input"
 $IconPath = Join-Path $RootDir "logos\feric.ico"
+$Architecture = $Architecture.ToLowerInvariant()
+if ($Architecture -notin @("x64", "arm64")) {
+    throw "Unsupported architecture '$Architecture'. Expected x64 or arm64."
+}
+$ZipPath = Join-Path $DistDir "$AppName-windows-$Architecture.zip"
 
 $RuntimeImage = $env:JAVA_HOME
 if ([string]::IsNullOrWhiteSpace($RuntimeImage)) {
@@ -29,8 +38,7 @@ try {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
         $InputDir, `
         (Join-Path $DistDir $AppName)
-    Remove-Item -Force -ErrorAction SilentlyContinue `
-        (Join-Path $DistDir "$AppName-Windows.zip")
+    Remove-Item -Force -ErrorAction SilentlyContinue $ZipPath
     New-Item -ItemType Directory -Force -Path $InputDir | Out-Null
     Copy-Item (Join-Path $RootDir "target\$JarName") `
         (Join-Path $InputDir $JarName)
@@ -54,12 +62,11 @@ try {
         throw "jpackage failed with exit code $LASTEXITCODE"
     }
 
-    $ZipPath = Join-Path $DistDir "$AppName-Windows.zip"
     Compress-Archive `
         -Path (Join-Path $DistDir $AppName) `
         -DestinationPath $ZipPath `
         -Force
-    Write-Host "App image created in $DistDir"
+    Write-Host "App image created in $DistDir ($Architecture)"
 }
 finally {
     Pop-Location

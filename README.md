@@ -3,7 +3,9 @@
 Feric is a Java Swing classroom IDE. Authenticated teachers create persistent,
 room-based projects stored in Supabase; authenticated students join by room code
 and receive a read-only shared project view. Students can copy shared files or
-the project into a separate local workspace.
+the project into a separate local workspace. The shared explorer uses a green
+selection state, and teacher-updated lines are highlighted in green for students
+without resetting their current scroll position.
 
 ## Requirements
 
@@ -30,6 +32,30 @@ project administrator before it can create classrooms.
 
 The Format action and `Cmd/Ctrl+Shift+I` use the bundled google-java-format
 library on Windows, macOS, and Linux.
+
+Code editors include a syntax-colored minimap at the right edge. Click or drag
+within it to navigate through the file; the visible editor range and caret
+position are marked in the overview.
+
+The **Terminal** tab embeds a real interactive shell in an xterm-compatible
+terminal emulator backed by a pseudo-terminal (PTY). Use it like a normal
+terminal: type commands directly, use shell history and keyboard shortcuts,
+copy and paste, resize the panel, and run interactive or full-screen terminal
+programs. **New Terminal** creates an independent shell and PTY session.
+For teachers, each classroom has a local working copy under
+`~/.feric/workspaces/teacher/<classroom-id>`; the terminal opens in that
+directory, and classroom files are mirrored there when they load or save.
+The editor's **Run in Terminal** action compiles and runs Java, C, C++, C#,
+Python, or JavaScript in the active terminal session; program input and output
+use the same PTY. Commands and programs run locally with the current user's
+permissions and are not sandboxed; do not run untrusted code. For a public
+student service, execute submissions only in a separate isolated
+worker/container with resource, process, filesystem, and network limits.
+For a public student service, execute submissions only in a separate isolated
+worker/container with resource, process, filesystem, and network limits. The
+Explorer has a **Delete** action and a
+right-click delete option for workspace files and folders; deletion asks for
+confirmation.
 
 ## Build distributable apps
 
@@ -94,13 +120,30 @@ Gatekeeper warnings.
    teacher-authorization tables; constraints, triggers, indexes, RPC
    operations, RLS policies, grants, and Realtime publication entries. The
    second migration changes room codes to five characters and rotates any
-   existing longer codes.
-   For a project where migration 001 was already applied, run migration 002
-   once in Supabase SQL Editor and restart Feric. Existing classroom codes
-   change during that upgrade; share each room's new five-character code.
+   existing longer codes. The third migration adds an owner-checked classroom
+   deletion RPC.
+   For an existing project, apply any migrations not yet run in filename
+   order. In particular, run migration 002 to rotate any old room codes and
+   migration 003 to enable classroom deletion, then restart Feric. If you
+   already ran the previous version of migration 003 and saw a permission
+   denied error, run the updated migration 003 again. Share each room's
+   five-character code after migration 002.
 3. In **Authentication → Providers**, enable Email/password sign-in. If email
    confirmation is enabled, users must confirm their address before signing
-   in. Keep confirmation enabled for a public deployment.
+   in. Keep confirmation enabled for a public deployment. In **Authentication
+   → URL Configuration → Redirect URLs**, allow
+   `http://127.0.0.1:43129/reset`. Keep the recovery email template's
+   confirmation link (`{{ .ConfirmationURL }}`) so Supabase verifies the
+   recovery token before redirecting to Feric.
+   To reset a password, the user selects **Forgot password?**, enters their
+   account email, and opens the recovery link on the same computer while Feric
+   remains open. The link opens a local callback page which passes the verified
+   recovery token to Feric, then Feric opens a native password form. Feric
+   sends the new password to the Supabase Auth API using that recovery token;
+   Supabase updates its protected password record. Passwords must never be
+   written directly to the database. The local listener binds only to
+   `127.0.0.1` and closes after 30 minutes; if Feric was closed or the link
+   expired, request another reset email.
 4. Register a teacher account from Feric or Supabase Auth. A project
    administrator must then authorize that account to create rooms by running
    this statement in the Supabase SQL Editor (substitute the teacher email):
